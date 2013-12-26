@@ -95,7 +95,7 @@ class NumLinkSolver
 
   end
   
-  def open_stat(status, point, stat, mark = nil)
+  def open_stat(status, point, stat, mark = " ")
       status.open_stat_at(point, stat, mark)
       update_fd1_point(status, point)
   end
@@ -494,7 +494,7 @@ class NumLinkSolver
       stat_tbl[point][-1] == CLOSE_MARK
     end
       
-    def open_stat_at(point, link_name, mark = " ")
+    def open_stat_at(point, link_name, mark)
       stat_tbl[point] = "%2s%s" % [link_name, mark]
     end
     
