@@ -2,12 +2,11 @@ class NumLinkSolver
 
   BREAK = 1000
   EMPTY = ""
-  FILLER = " . "
-  FAKE_WALL = " 0*"
   START_MARK = "S"
   MID_MARK = "M"
   END_MARK = "E"
   CLOSE_MARK = "*"
+  FILLER = " . "
   FD1_MARK = " o "
   UP_MARK = " ^ "
   DOWN_MARK = " v "
@@ -24,6 +23,7 @@ class NumLinkSolver
     LEFT_MARK =>[ 0, -1],
     UP_MARK   =>[-1,  0]
   }
+
   AROUND_DIRECTIONS = [
     [ 0,  1],
     [ 1,  1],
@@ -34,6 +34,7 @@ class NumLinkSolver
     [-1,  0],
     [-1,  1]
   ]
+
   SPLIT_PATTERNS = [
     9,10,11,*17..19,*25..27,
     *33..47,*49..51,*57..59,66,
@@ -60,13 +61,15 @@ class NumLinkSolver
   end
   
   def start
+
     @start_time = Time.now
-    @all_cases = 0
-    @branch_err = 0
-    @partition_err = 0
-    @forward_err = 0
-    @ok_cases = 0
-    
+    @cnt_tbl = {
+      :br => 0,
+      :al => 0,
+      :pt => 0,
+      :fd => 0,
+      :ok => 0,
+    }
     status = NumLinkStatus.new(@size)
     init_status(status)
     print_status(status)
@@ -82,8 +85,8 @@ class NumLinkSolver
       }
       
       open_stat(status, points.first, link_name, START_MARK)
-      points[1..-2].each { |idx|
-        open_stat(status, points[idx], link_name, MID_MARK)
+      points[1..-2].each { |point|
+        open_stat(status, point, link_name, MID_MARK)
       }
       open_stat(status, points.last, link_name, END_MARK)
     }
@@ -144,7 +147,7 @@ class NumLinkSolver
 
   def solve(status)
 
-    @all_cases += 1
+    @cnt_tbl[:al] += 1
     
     if status.link_parts.empty?
       puts "\n----- !!!!solved!!!! -----" if $DEBUG
@@ -157,12 +160,12 @@ class NumLinkSolver
     # puts "fd1_points : #{status.fd1_points}" if $DEBUG
     
     unless chk_partition?(status)
-      @partition_err += 1
+      @cnt_tbl[:pt] += 1
       return
     end
     
     unless chk_forward1?(status)
-      @forward_err += 1
+      @cnt_tbl[:fd] += 1
       return
     end
 
@@ -176,7 +179,7 @@ class NumLinkSolver
       next unless status.is_empty_at?(point2)
   
       unless chk_branch?(status, point2)
-        @branch_err += 1
+        @cnt_tbl[:br] += 1
         next
       end
   
@@ -259,15 +262,13 @@ class NumLinkSolver
     
     neighbors(point).each { |dir_mark, neighbor|
       
-      stat = status[neighbor]
-      
       next if status.is_closed_at?(neighbor)
 
       # 行き止まりでない壁をカウント
       free_cnt += 1
 
       # 未連結の箇所待避
-      if stat[0, 2].to_i > 0
+      if status.is_open_at?(neighbor)
         exit_points[neighbor] = true
       end
     }
@@ -362,7 +363,7 @@ class NumLinkSolver
       status.link_parts.each { |lp|
         next unless exit_points.include?(lp.st)
         next unless exit_points.include?(lp.ed)
-        status2.delete_link_part lp
+        status2.delete_link_part(lp)
       }
     }
 
@@ -374,7 +375,6 @@ class NumLinkSolver
     end
     
     return true
-    
   end
 
   def fill_partition_forward1(status, point, exit_points)
@@ -382,11 +382,9 @@ class NumLinkSolver
     status.fill_stat_at(point)
     
     neighbors(point).each { |dir_mark, neighbor|
-      
-      stat = status[neighbor]
-      
+            
       # 未連結の箇所を待避
-      if stat[0, 2].to_i > 0 && stat[2, 1] != CLOSE_MARK
+      if status.is_open_at?(neighbor)
         exit_points[neighbor] = true
       end
 
@@ -401,8 +399,8 @@ class NumLinkSolver
   def print_progress(status)
     if BREAK > 0
       print "."
-      @ok_cases += 1
-      if @ok_cases % BREAK == 0
+      @cnt_tbl[:ok] += 1
+      if @cnt_tbl[:ok] % BREAK == 0
         print_status status
       end
     end
@@ -413,31 +411,32 @@ class NumLinkSolver
     time = Time.now - @start_time
     time2 = time.divmod(60 * 60)
     time3 = time2[1].divmod(60)
+    cnt_str = @cnt_tbl.map { |k, v| "#{k}:#{v}"} * ", "
     
-    puts "\ntm:%02d:%02d:%02d, br:#{@branch_err}, al:#{@all_cases}, pt:#{@partition_err}, fd:#{@forward_err}, ok:#{@ok_cases}\n" \
+    puts "\ntm:%02d:%02d:%02d, #{cnt_str}\n" \
           % [time2[0], time3[0], time3[1]]
-            
     puts status
     puts
     
   end
   
   def all_points
-    unless @all_points
-      @all_points = [*0...@size].product([*0...@size])
-    end
-    @all_points.to_enum
+    Enumerator.new { |yielder|
+      @size.times { |x|
+        @size.times { |y|
+          yielder.yield [x, y]
+        }
+      }
+    }
   end
 
   def neighbors(point)
     Enumerator.new { |yielder|
-      NEIGHBOR_DIRECTIONS.each { |mark, direction|
-        
+      NEIGHBOR_DIRECTIONS.each { |mark, direction|        
         x = point[0] + direction[0]
         next unless x.between?(0, @size-1)
         y = point[1] + direction[1]
         next unless y.between?(0, @size-1)
-       
         yielder.yield mark, [x, y]
       }
     }
@@ -446,12 +445,10 @@ class NumLinkSolver
   def arounds(point)
     Enumerator.new { |yielder|
       AROUND_DIRECTIONS.each { |direction|
-        
         x = point[0] + direction[0]
         next unless x.between?(0, @size-1)
         y = point[1] + direction[1]
         next unless y.between?(0, @size-1)
-          
         yielder.yield [x, y]
       }
     }
@@ -485,11 +482,19 @@ class NumLinkSolver
       !stat_tbl.include?(point)
     end
 
+    def is_open_at?(point)
+      stat = stat_tbl[point]
+      return false if stat == EMPTY
+      return false if stat == FILLER
+      return false if stat[-1] == CLOSE_MARK
+      return true
+    end
+
     def is_closed_at?(point)
-      stat_tbl[point][2, 1] == CLOSE_MARK
+      stat_tbl[point][-1] == CLOSE_MARK
     end
       
-    def open_stat_at(point, link_name, mark = nil)
+    def open_stat_at(point, link_name, mark = " ")
       stat_tbl[point] = "%2s%s" % [link_name, mark]
     end
     
@@ -500,8 +505,8 @@ class NumLinkSolver
       stat_tbl[point] = "%2s%s" % [link_name, CLOSE_MARK]
     end
     
-    def fill_stat_at(point, stat = FILLER)
-      stat_tbl[point] = stat
+    def fill_stat_at(point)
+      stat_tbl[point] = FILLER
     end
     
     def set_direction(point, dir_mark)
@@ -525,8 +530,8 @@ class NumLinkSolver
       last_part = link_parts.last
       link_parts << link_part
       if last_part && last_part.name == link_part.name
-        last_part.next = true;
-        link_part.prev = true;
+        last_part.has_next = true;
+        link_part.has_prev = true;
       end
     end
     
