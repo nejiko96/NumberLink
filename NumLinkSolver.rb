@@ -50,8 +50,18 @@ module NumberLink
     *232..236, 238, 242, 250
   ]
 
+  def log(msg, *args)
+    return unless $DEBUG
+    puts
+    puts "----- #{msg} -----"
+    args.each { |arg| puts arg }
+    puts
+  end
+
+  module_function :log
+
   # = NumberLink Problem
-  class Problem < Struct.new(
+  class Definition < Struct.new(
     :sz,
     :link_tbl
   )
@@ -69,7 +79,7 @@ module NumberLink
   end
 
   # = Information of each link or part of link
-  class LinkPart < Struct.new(
+  class LinkSection < Struct.new(
     :name,
     :st,
     :ed,
@@ -87,9 +97,8 @@ module NumberLink
 
   # = utility for grid calculation
   module GridCalc
-
-    def inside?
-      -> (z) { z.between?(0, sz - 1) }
+    def inside?(z)
+      z.between?(0, sz - 1)
     end
 
     def all_points
@@ -105,8 +114,8 @@ module NumberLink
     def neighbors(point)
       Enumerator.new do |yielder|
         NEIGHBOR_DIRECTIONS.each do |mark, diff|
-          next unless inside?[x = point[0] + diff[0]]
-          next unless inside?[y = point[1] + diff[1]]
+          next unless inside?(x = point[0] + diff[0])
+          next unless inside?(y = point[1] + diff[1])
           yielder.yield mark, [x, y]
         end
       end
@@ -115,8 +124,8 @@ module NumberLink
     def arounds(point)
       Enumerator.new do |yielder|
         AROUND_DIRECTIONS.each do |diff|
-          next unless inside?[x = point[0] + diff[0]]
-          next unless inside?[y = point[1] + diff[1]]
+          next unless inside?(x = point[0] + diff[0])
+          next unless inside?(y = point[1] + diff[1])
           yielder.yield [x, y]
         end
       end
@@ -131,8 +140,8 @@ module NumberLink
     end
   end
 
-  # = status access interface
-  module StatusAccess
+  # = status access methods
+  module StatusHolder
     def [](point)
       stat_tbl[point]
     end
@@ -180,28 +189,28 @@ module NumberLink
     end
   end
 
-  # = link parts access interface
-  module LinkPartsAccess
-    def current_link
-      link_parts.first
+  # = link section access methods
+  module LinkSectionHolder
+    def current_section
+      sections.first
     end
 
-    def add_link_part(link_part)
-      last_part = link_parts.last
-      link_parts << link_part
-      if last_part && last_part.name == link_part.name
-        last_part.has_next = true
-        link_part.has_prev = true
+    def add_section(section)
+      last_sec = sections.last
+      sections << section
+      if last_sec && last_sec.name == section.name
+        last_sec.has_next = true
+        section.has_prev = true
       end
     end
 
-    def delete_link_part(link_part)
-      link_parts.delete link_part
+    def delete_section(section)
+      sections.delete section
     end
   end
 
-  # = Forward-1 points access interface
-  module Fd1Access
+  # = Forward-1 points access methods
+  module Fd1PointsHolder
     def fd1_points
       fd1_tbl.keys
     end
@@ -215,22 +224,207 @@ module NumberLink
     end
   end
 
+  # = link manipulation methods
+  module LinkHandler
+    def init_stat(definition)
+      self.sz = definition.sz
+      definition.link_tbl.each do |link_name, points|
+        points.each_cons(2) do |st, ed|
+          add_section(LinkSection.new(link_name, st, ed))
+        end
+        open_stat(points.first, link_name, START_MARK)
+        points[1..-2].each do |point|
+          open_stat(point, link_name, MID_MARK)
+        end
+        open_stat(points.last, link_name, END_MARK)
+      end
+      close_connected_links
+    end
+
+    def open_stat(point, stat, mark = ' ')
+      open_stat_at(point, stat, mark)
+      update_fd1_point(point)
+    end
+
+    def close_connected_links
+      sections.clone.each do |sec|
+        close_connected_link(sec)
+      end
+    end
+
+    def close_connected_link(sec = nil)
+      sec ||= current_section
+      diff = [sec.ed[0] - sec.st[0], sec.ed[1] - sec.st[1]]
+      dir_mark = NEIGHBOR_DIRECTIONS.key(diff)
+      return unless dir_mark
+      close_stat_at(sec.st) unless sec.has_prev
+      set_direction(sec.st, dir_mark)
+      close_stat_at(sec.ed) unless sec.has_next
+      delete_section(sec)
+      NumberLink.log("link #{sec} closed", self)
+    end
+  end
+
+  # = Branch check
+  module BranchChecker
+    def chk_branch?(point)
+      sec = current_section
+      closed_stat = sprintf('%2s%s', sec.name, CLOSE_MARK)
+      neighbors(point).each do |dir_mark, neighbor|
+        if self[neighbor] == closed_stat
+          NumberLink.log("branch of '#{sec.name}' at #{point}", self)
+          return false
+        end
+      end
+      true
+    end
+  end
+
+  # = Partition check
+  module PartitionChecker
+    def chk_partition?
+      grid2 = deep_copy
+      all_points.each do |point|
+        next unless grid2.empty_at?(point)
+        # dead end found
+        exit_points = {}
+        return false unless grid2.fill_partition(point, exit_points)
+        sec_active = false
+        sections.each do |sec|
+          next unless exit_points.include?(sec.st)
+          next unless exit_points.include?(sec.ed)
+          sec_active = true
+          grid2.delete_section(sec)
+        end
+        # checks if the partition contains active link
+        unless sec_active
+          NumberLink.log("dead partition at #{point}", grid2)
+          return false
+        end
+      end
+      # checks if unreachable link exists
+      unless grid2.sections.empty?
+        NumberLink.log("split link #{grid2.current_section}", grid2)
+        return false
+      end
+      true
+    end
+
+    def fill_partition(point, exit_points)
+      free_cnt = 0
+      neighbors(point).each do |dir_mark, neighbor|
+        next if closed_at?(neighbor)
+        # count if not closed
+        free_cnt += 1
+        # save exit point
+        open_at?(neighbor) && exit_points[neighbor] = true
+      end
+      # dead end found
+      if free_cnt <= 1
+        NumberLink.log("dead end at #{point}", self)
+        return false
+      end
+      fill_stat_at(point)
+      neighbors(point).each do |dir_mark, neighbor|
+        next unless empty_at?(neighbor)
+        return false unless fill_partition(neighbor, exit_points)
+      end
+      true
+    end
+  end
+
+  # = Forward 1 check
+  module Fd1Checker
+    def update_fd1_point(point)
+      delete_fd1_point(point)
+      arounds(point).each do |around|
+        next unless empty_at?(around)
+        unless split_at?(around)
+          delete_fd1_point(around)
+          next
+        end
+        add_fd1_point(around)
+      end
+    end
+
+    def split_at?(point)
+      split_pat = 0
+      arounds_include_outside(point).each_with_index do |around, i|
+        flag = 1 << i
+        inside?(around[0]) || split_pat |= flag && next
+        inside?(around[1]) || split_pat |= flag && next
+        empty_at?(around) || split_pat |= flag
+      end
+      return true if SPLIT_PATTERNS.include?(split_pat)
+      false
+    end
+
+    def chk_forward1?
+      fd1_points.each do |point|
+        return false unless chk_forward1_at?(point)
+      end
+      true
+    end
+
+    def chk_forward1_at?(fd)
+      grid2 = deep_copy
+      grid2.close_stat_at(fd, '0')
+      all_points.each do |point|
+        next unless grid2.empty_at?(point)
+        exit_points = {}
+        grid2.fill_partition_forward1(point, exit_points)
+        # puts "  forward : #{fd}, exit : #{exit_points}" if $DEBUG
+        # check if exit point exists
+        if exit_points.empty?
+          NumberLink.log("dead partition by #{fd} at #{point}", grid2)
+          return false
+        end
+        # remove reachable links
+        sections.each do |sec|
+          next unless exit_points.include?(sec.st)
+          next unless exit_points.include?(sec.ed)
+          grid2.delete_section(sec)
+        end
+      end
+      # check if multiple split exists
+      if grid2.sections.size > 1
+        NumberLink.log("multiple split at #{fd} for #{grid2.sections * ','}", grid2)
+        return false
+      end
+      true
+    end
+
+    def fill_partition_forward1(point, exit_points)
+      fill_stat_at(point)
+      neighbors(point).each do |dir_mark, neighbor|
+        # save exit points
+        open_at?(neighbor) && exit_points[neighbor] = true
+        next unless empty_at?(neighbor)
+        fill_partition_forward1(neighbor, exit_points)
+      end
+    end
+  end
+
   # = Information of grid
   class Grid < Struct.new(
     :sz,
     :stat_tbl,
     :h_walls,
     :v_walls,
-    :link_parts,
+    :sections,
     :fd1_tbl
   )
     include GridCalc
-    include StatusAccess
-    include LinkPartsAccess
-    include Fd1Access
+    include StatusHolder
+    include LinkSectionHolder
+    include Fd1PointsHolder
+    include LinkHandler
+    include BranchChecker
+    include PartitionChecker
+    include Fd1Checker
 
-    def initialize(size)
-      super(size, Hash.new(EMPTY), {}, {}, [], {})
+    def initialize
+      super(0, Hash.new(EMPTY), {}, {}, [], {})
     end
 
     def deep_copy
@@ -281,7 +475,7 @@ module NumberLink
 
   # = NumberLink Solver
   class Solver < Struct.new(
-    :problem,
+    :definition,
     :start_time,
     :cnt_tbl
   )
@@ -289,16 +483,9 @@ module NumberLink
       super(nil, nil, nil)
     end
 
-    def msg_out
-      lambda(msg, grid) do
-        puts "\n----- #{msg} -----" if $DEBUG
-        print_grid(grid) if $DEBUG
-      end
-    end
-
     def load(code)
-      self.problem = Problem.new
-      problem.instance_eval(code)
+      self.definition = Definition.new
+      definition.instance_eval(code)
     end
 
     def start
@@ -310,266 +497,67 @@ module NumberLink
         fd: 0,
         ok: 0,
       }
-      grid = Grid.new(problem.sz)
-      init_grid(grid)
+      grid = Grid.new
+      grid.init_stat(definition)
       print_grid(grid)
       solve(grid)
-    end
-
-    def init_grid(grid)
-      problem.link_tbl.each do |link_name, points|
-        points.each_cons(2) do |st, ed|
-          grid.add_link_part(LinkPart.new(link_name, st, ed))
-        end
-        open_stat(grid, points.first, link_name, START_MARK)
-        points[1..-2].each do |point|
-          open_stat(grid, point, link_name, MID_MARK)
-        end
-        open_stat(grid, points.last, link_name, END_MARK)
-      end
-      close_connected_links(grid)
-    end
-
-    def open_stat(grid, point, stat, mark = ' ')
-      grid.open_stat_at(point, stat, mark)
-      update_fd1_point(grid, point)
-    end
-
-    def update_fd1_point(grid, point)
-      grid.delete_fd1_point(point)
-      grid.arounds(point).each do |around|
-        next unless grid.empty_at?(around)
-        # grid.delete_fd1_point(around)
-        unless split_at?(grid, around)
-          grid.delete_fd1_point(around)
-          next
-        end
-        grid.add_fd1_point(around)
-      end
-    end
-
-    def close_connected_links(grid)
-      grid.link_parts.clone.each do |lp|
-        close_connected_link(grid, lp)
-      end
-    end
-
-    def close_connected_link(grid, lp = nil)
-      lp ||= grid.current_link
-      diff = [lp.ed[0] - lp.st[0], lp.ed[1] - lp.st[1]]
-      dir_mark = NEIGHBOR_DIRECTIONS.key(diff)
-      return unless dir_mark
-      grid.close_stat_at(lp.st) unless lp.has_prev
-      grid.set_direction(lp.st, dir_mark)
-      grid.close_stat_at(lp.ed) unless lp.has_next
-      grid.delete_link_part(lp)
-      puts "\n----- link #{lp} closed -----" if $DEBUG
-      print_grid(grid) if $DEBUG
     end
 
     def solve(grid)
       cnt_tbl[:al] += 1
 
-      if grid.link_parts.empty?
-        puts "\n----- !!!!solved!!!! -----" if $DEBUG
+      if grid.sections.empty?
+        NumberLink.log('!!!!solved!!!!', self, grid)
         print_grid(grid)
         exit
       end
 
-      # puts "\nstat_tbl : #{grid.stat_tbl}" if $DEBUG
-      # puts "link_parts : #{grid.link_parts}" if $DEBUG
-      # puts "fd1_points : #{grid.fd1_points}" if $DEBUG
+      grid.chk_partition? || (cnt_tbl[:pt] += 1) && return
+      grid.chk_forward1? || (cnt_tbl[:fd] += 1) && return
 
-      unless chk_partition?(grid)
-        cnt_tbl[:pt] += 1
-        return
-      end
-
-      unless chk_forward1?(grid)
-        cnt_tbl[:fd] += 1
-        return
-      end
-
+      cnt_tbl[:ok] += 1
       print_progress(grid)
-
-      lp = grid.current_link
-      point = lp.st
+      sec = grid.current_section
+      point = sec.st
 
       grid.neighbors(point).each do |dir_mark, point2|
 
         next unless grid.empty_at?(point2)
-
-        unless chk_branch?(grid, point2)
-          cnt_tbl[:br] += 1
-          next
-        end
+        grid.chk_branch?(point2) || (cnt_tbl[:br] += 1) && next
 
         grid2 = grid.deep_copy
         grid2.close_stat_at(point)
         grid2.set_direction(point, dir_mark)
-        open_stat(grid2, point2, lp.name)
-        grid2.current_link.st = point2
-        close_connected_link(grid2)
+        grid2.open_stat(point2, sec.name)
+        grid2.current_section.st = point2
+        grid2.close_connected_link
 
         solve(grid2)
       end
     end
 
-    def chk_branch?(grid, point)
-      lp = grid.current_link
-      closed_stat = sprintf('%2s%s', lp.name, CLOSE_MARK)
-      grid.neighbors(point).each do |dir_mark, neighbor|
-        if grid[neighbor] == closed_stat
-          puts "\n----- branch of '#{lp.name}' at #{point} -----" if $DEBUG
-          print_grid(grid) if $DEBUG
-          return false
-        end
-      end
-      true
-    end
-
-    def chk_partition?(grid)
-      grid2 = grid.deep_copy
-      grid.all_points.each do |point|
-        next unless grid2.empty_at?(point)
-        # dead end found
-        exit_points = {}
-        unless fill_partition(grid2, point, exit_points)
-          return false
-        end
-        part_active = false
-        grid.link_parts.each do |lp|
-          next unless exit_points.include?(lp.st)
-          next unless exit_points.include?(lp.ed)
-          part_active = true
-          grid2.delete_link_part(lp)
-        end
-        # puts "  fill : #{point}, exit : #{exit_points}, active : #{part_active}" if $DEBUG
-        # checks if the partition contains active link
-        unless part_active
-          puts "\n----- dead partition at #{point} -----" if $DEBUG
-          print_grid(grid2) if $DEBUG
-          return false
-        end
-      end
-      # checks if unreachable link exists
-      unless grid2.link_parts.empty?
-        puts "\n----- split link #{grid2.current_link} -----" if $DEBUG
-        print_grid(grid2) if $DEBUG
-        return false
-      end
-      true
-    end
-
-    def fill_partition(grid, point, exit_points)
-      free_cnt = 0
-      grid.neighbors(point).each do |dir_mark, neighbor|
-        next if grid.closed_at?(neighbor)
-        # count if not closed
-        free_cnt += 1
-        # save exit point
-        grid.open_at?(neighbor) && exit_points[neighbor] = true
-      end
-      # dead end found
-      if free_cnt <= 1
-        puts "\n----- dead end at #{point} -----" if $DEBUG
-        print_grid grid if $DEBUG
-        return false
-      end
-      grid.fill_stat_at(point)
-      grid.neighbors(point).each do |dir_mark, neighbor|
-        next unless grid.empty_at?(neighbor)
-        return false unless fill_partition(grid, neighbor, exit_points)
-      end
-      true
-    end
-
-    def chk_forward1?(grid)
-      grid.fd1_points.each do |point|
-        return false unless chk_forward1_at?(grid, point)
-      end
-      true
-    end
-
-    def split_at?(grid, point)
-      split_pat = 0
-      grid.arounds_include_outside(point).each_with_index do |around, i|
-        flag = 1 << i
-        unless around[0].between?(0, grid.size - 1)
-          split_pat |= flag
-          next
-        end
-        unless around[1].between?(0, grid.size - 1)
-          split_pat |= flag
-          next
-        end
-        grid.empty_at?(around) || split_pat |= flag
-      end
-      # puts "point : #{point}, split_pat : #{split_pat}=>has split" if $DEBUG
-      # puts "point : #{point}, split_pat : #{split_pat}=>no split" if $DEBUG
-      return true if SPLIT_PATTERNS.include?(split_pat)
-      false
-    end
-
-    def chk_forward1_at?(grid, fd)
-      grid2 = grid.deep_copy
-      grid2.close_stat_at(fd, '0')
-      grid.all_points.each do |point|
-        next unless grid2.empty_at?(point)
-        fill_partition_forward1(grid2, point, exit_points = {})
-        # puts "  forward : #{fd}, exit : #{exit_points}" if $DEBUG
-        # check if exit point exists
-        if exit_points.empty?
-          puts "\n----- dead partition by #{fd} at #{point} -----" if $DEBUG
-          print_grid grid2 if $DEBUG
-          return false
-        end
-        # remove reachable links
-        grid.link_parts.each do |lp|
-          next unless exit_points.include?(lp.st)
-          next unless exit_points.include?(lp.ed)
-          grid2.delete_link_part(lp)
-        end
-      end
-      # check if multiple split exists
-      if grid2.link_parts.size > 1
-        puts "\n----- multiple split at #{fd} for #{grid2.link_parts * ','} -----" if $DEBUG
-        print_grid grid2 if $DEBUG
-        return false
-      end
-
-      true
-    end
-
-    def fill_partition_forward1(grid, point, exit_points)
-      grid.fill_stat_at(point)
-      grid.neighbors(point).each do |dir_mark, neighbor|
-        # save exit points
-        grid.open_at?(neighbor) && exit_points[neighbor] = true
-        next unless grid.empty_at?(neighbor)
-        fill_partition_forward1(grid, neighbor, exit_points)
-      end
-    end
-
     def print_progress(grid)
-      if BREAK > 0
-        print '.'
-        cnt_tbl[:ok] += 1
-        cnt_tbl[:ok] % BREAK > 0 || print_grid(grid)
-      end
+      return unless BREAK > 0
+      print '.'
+      cnt_tbl[:ok] % BREAK > 0 || print_grid(grid)
     end
 
     def print_grid(grid)
+      puts
+      puts self
+      puts grid
+      puts
+    end
+
+    def to_s
       time = Time.now - start_time
       time2 = time.divmod(60 * 60)
       time3 = time2[1].divmod(60)
       cnt_str = cnt_tbl.map { |k, v| "#{k}:#{v}" } * ', '
-      puts sprintf(
-        "\ntm:%02d:%02d:%02d, #{cnt_str}\n",
+      sprintf(
+        "tm:%02d:%02d:%02d, #{cnt_str}",
         time2[0], time3[0], time3[1]
       )
-      puts grid
-      puts
     end
   end
 end
