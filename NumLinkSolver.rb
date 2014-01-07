@@ -87,6 +87,11 @@ module NumberLink
 
   # = utility for grid calculation
   module GridCalc
+
+    def inside?
+      -> (z) { z.between?(0, sz - 1) }
+    end
+
     def all_points
       Enumerator.new do |yielder|
         sz.times do |x|
@@ -100,8 +105,8 @@ module NumberLink
     def neighbors(point)
       Enumerator.new do |yielder|
         NEIGHBOR_DIRECTIONS.each do |mark, diff|
-          next unless (x = point[0] + diff[0]).between?(0, sz - 1)
-          next unless (y = point[1] + diff[1]).between?(0, sz - 1)
+          next unless inside?[x = point[0] + diff[0]]
+          next unless inside?[y = point[1] + diff[1]]
           yielder.yield mark, [x, y]
         end
       end
@@ -110,8 +115,8 @@ module NumberLink
     def arounds(point)
       Enumerator.new do |yielder|
         AROUND_DIRECTIONS.each do |diff|
-          next unless (x = point[0] + diff[0]).between?(0, sz - 1)
-          next unless (y = point[1] + diff[1]).between?(0, sz - 1)
+          next unless inside?[x = point[0] + diff[0]]
+          next unless inside?[y = point[1] + diff[1]]
           yielder.yield [x, y]
         end
       end
@@ -126,25 +131,8 @@ module NumberLink
     end
   end
 
-  # = Information of grid
-  class Grid < Struct.new(
-    :sz,
-    :stat_tbl,
-    :h_walls,
-    :v_walls,
-    :link_parts,
-    :fd1_tbl
-  )
-    include GridCalc
-
-    def initialize(size)
-      super(size, Hash.new(EMPTY), {}, {}, [], {})
-    end
-
-    def deep_copy
-      Marshal.load(Marshal.dump(self))
-    end
-
+  # = status access interface
+  module StatusAccess
     def [](point)
       stat_tbl[point]
     end
@@ -190,7 +178,10 @@ module NumberLink
         h_walls[[point[0] - 1, point[1]]] = dir_mark
       end
     end
+  end
 
+  # = link parts access interface
+  module LinkPartsAccess
     def current_link
       link_parts.first
     end
@@ -207,7 +198,10 @@ module NumberLink
     def delete_link_part(link_part)
       link_parts.delete link_part
     end
+  end
 
+  # = Forward-1 points access interface
+  module Fd1Access
     def fd1_points
       fd1_tbl.keys
     end
@@ -218,6 +212,29 @@ module NumberLink
 
     def delete_fd1_point(point)
       fd1_tbl.delete point
+    end
+  end
+
+  # = Information of grid
+  class Grid < Struct.new(
+    :sz,
+    :stat_tbl,
+    :h_walls,
+    :v_walls,
+    :link_parts,
+    :fd1_tbl
+  )
+    include GridCalc
+    include StatusAccess
+    include LinkPartsAccess
+    include Fd1Access
+
+    def initialize(size)
+      super(size, Hash.new(EMPTY), {}, {}, [], {})
+    end
+
+    def deep_copy
+      Marshal.load(Marshal.dump(self))
     end
 
     def to_s
@@ -270,6 +287,13 @@ module NumberLink
   )
     def initialize
       super(nil, nil, nil)
+    end
+
+    def msg_out
+      lambda(msg, grid) do
+        puts "\n----- #{msg} -----" if $DEBUG
+        print_grid(grid) if $DEBUG
+      end
     end
 
     def load(code)
@@ -348,7 +372,7 @@ module NumberLink
 
       if grid.link_parts.empty?
         puts "\n----- !!!!solved!!!! -----" if $DEBUG
-        print_grid grid
+        print_grid(grid)
         exit
       end
 
@@ -366,7 +390,7 @@ module NumberLink
         return
       end
 
-      print_progress grid
+      print_progress(grid)
 
       lp = grid.current_link
       point = lp.st
