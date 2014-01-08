@@ -50,17 +50,18 @@ module NumberLink
     *232..236, 238, 242, 250
   ]
 
-  def log(msg, *args)
-    return unless $DEBUG
-    puts
-    puts "----- #{msg} -----"
-    args.each { |arg| puts arg }
-    puts
+  module Debug
+    def log(msg, *args)
+      return unless $DEBUG
+      puts
+      puts "----- #{msg} -----"
+      args.each { |arg| puts arg }
+      puts
+    end
+    module_function :log
   end
 
-  module_function :log
-
-  # = NumberLink Problem
+  # = NumberLink problem definition
   class Definition < Struct.new(
     :sz,
     :link_tbl
@@ -97,8 +98,8 @@ module NumberLink
 
   # = utility for grid calculation
   module GridCalc
-    def inside?(z)
-      z.between?(0, sz - 1)
+    def inside?(p)
+      p.all? { |x| x.between?(0, sz - 1) }
     end
 
     def all_points
@@ -114,30 +115,27 @@ module NumberLink
     def neighbors(point)
       Enumerator.new do |yielder|
         NEIGHBOR_DIRECTIONS.each do |mark, diff|
-          next unless inside?(x = point[0] + diff[0])
-          next unless inside?(y = point[1] + diff[1])
-          yielder.yield mark, [x, y]
+          yielder.yield mark, [point[0] + diff[0], point[1] + diff[1]]
         end
       end
+    end
+
+    def neighbors_inner(point)
+      neighbors(point).select { |m, p| inside?(p) }
     end
 
     def arounds(point)
-      Enumerator.new do |yielder|
-        AROUND_DIRECTIONS.each do |diff|
-          next unless inside?(x = point[0] + diff[0])
-          next unless inside?(y = point[1] + diff[1])
-          yielder.yield [x, y]
-        end
-      end
-    end
-
-    def arounds_include_outside(point)
       Enumerator.new do |yielder|
         AROUND_DIRECTIONS.each do |diff|
           yielder.yield [point[0] + diff[0], point[1] + diff[1]]
         end
       end
     end
+
+    def arounds_inner(point)
+      arounds(point).select { |p| inside?(p) }
+    end
+
   end
 
   # = status access methods
@@ -195,17 +193,17 @@ module NumberLink
       sections.first
     end
 
-    def add_section(section)
+    def add_section(sec)
       last_sec = sections.last
-      sections << section
-      if last_sec && last_sec.name == section.name
+      sections << sec
+      if last_sec && last_sec.name == sec.name
         last_sec.has_next = true
-        section.has_prev = true
+        sec.has_prev = true
       end
     end
 
-    def delete_section(section)
-      sections.delete section
+    def delete_section(sec)
+      sections.delete sec
     end
   end
 
@@ -261,18 +259,26 @@ module NumberLink
       set_direction(sec.st, dir_mark)
       close_stat_at(sec.ed) unless sec.has_next
       delete_section(sec)
-      NumberLink.log("link #{sec} closed", self)
+      Debug.log("link #{sec} closed", self)
+    end
+
+    def move(from, to, link_name, dir_mark)
+      close_stat_at(from)
+      set_direction(from, dir_mark)
+      open_stat(to, link_name)
+      current_section.st = to
+      close_connected_link
     end
   end
 
   # = Branch check
   module BranchChecker
     def chk_branch?(point)
-      sec = current_section
-      closed_stat = sprintf('%2s%s', sec.name, CLOSE_MARK)
-      neighbors(point).each do |dir_mark, neighbor|
+      sec_name = current_section
+      closed_stat = sprintf('%2s%s', sec_name, CLOSE_MARK)
+      neighbors_inner(point).each do |dir_mark, neighbor|
         if self[neighbor] == closed_stat
-          NumberLink.log("branch of '#{sec.name}' at #{point}", self)
+          Debug.log("branch of '#{sec_name}' at #{point}", self)
           return false
         end
       end
@@ -298,13 +304,13 @@ module NumberLink
         end
         # checks if the partition contains active link
         unless sec_active
-          NumberLink.log("dead partition at #{point}", grid2)
+          Debug.log("dead partition at #{point}", grid2)
           return false
         end
       end
       # checks if unreachable link exists
       unless grid2.sections.empty?
-        NumberLink.log("split link #{grid2.current_section}", grid2)
+        Debug.log("split link #{grid2.current_section}", grid2)
         return false
       end
       true
@@ -312,7 +318,7 @@ module NumberLink
 
     def fill_partition(point, exit_points)
       free_cnt = 0
-      neighbors(point).each do |dir_mark, neighbor|
+      neighbors_inner(point).each do |dir_mark, neighbor|
         next if closed_at?(neighbor)
         # count if not closed
         free_cnt += 1
@@ -321,11 +327,11 @@ module NumberLink
       end
       # dead end found
       if free_cnt <= 1
-        NumberLink.log("dead end at #{point}", self)
+        Debug.log("dead end at #{point}", self)
         return false
       end
       fill_stat_at(point)
-      neighbors(point).each do |dir_mark, neighbor|
+      neighbors_inner(point).each do |dir_mark, neighbor|
         next unless empty_at?(neighbor)
         return false unless fill_partition(neighbor, exit_points)
       end
@@ -337,7 +343,7 @@ module NumberLink
   module Fd1Checker
     def update_fd1_point(point)
       delete_fd1_point(point)
-      arounds(point).each do |around|
+      arounds_inner(point).each do |around|
         next unless empty_at?(around)
         unless split_at?(around)
           delete_fd1_point(around)
@@ -349,10 +355,9 @@ module NumberLink
 
     def split_at?(point)
       split_pat = 0
-      arounds_include_outside(point).each_with_index do |around, i|
+      arounds(point).each_with_index do |around, i|
         flag = 1 << i
-        inside?(around[0]) || split_pat |= flag && next
-        inside?(around[1]) || split_pat |= flag && next
+        inside?(around) || split_pat |= flag && next
         empty_at?(around) || split_pat |= flag
       end
       return true if SPLIT_PATTERNS.include?(split_pat)
@@ -360,10 +365,7 @@ module NumberLink
     end
 
     def chk_forward1?
-      fd1_points.each do |point|
-        return false unless chk_forward1_at?(point)
-      end
-      true
+      fd1_points.all? { |point| chk_forward1_at?(point) }
     end
 
     def chk_forward1_at?(fd)
@@ -376,7 +378,7 @@ module NumberLink
         # puts "  forward : #{fd}, exit : #{exit_points}" if $DEBUG
         # check if exit point exists
         if exit_points.empty?
-          NumberLink.log("dead partition by #{fd} at #{point}", grid2)
+          Debug.log("dead partition by #{fd} at #{point}", grid2)
           return false
         end
         # remove reachable links
@@ -388,7 +390,7 @@ module NumberLink
       end
       # check if multiple split exists
       if grid2.sections.size > 1
-        NumberLink.log("multiple split at #{fd} for #{grid2.sections * ','}", grid2)
+        Debug.log("multiple split at #{fd} for #{grid2.sections * ','}", grid2)
         return false
       end
       true
@@ -396,7 +398,7 @@ module NumberLink
 
     def fill_partition_forward1(point, exit_points)
       fill_stat_at(point)
-      neighbors(point).each do |dir_mark, neighbor|
+      neighbors_inner(point).each do |dir_mark, neighbor|
         # save exit points
         open_at?(neighbor) && exit_points[neighbor] = true
         next unless empty_at?(neighbor)
@@ -507,7 +509,7 @@ module NumberLink
       cnt_tbl[:al] += 1
 
       if grid.sections.empty?
-        NumberLink.log('!!!!solved!!!!', self, grid)
+        Debug.log('!!!!solved!!!!', self, grid)
         print_grid(grid)
         exit
       end
@@ -520,18 +522,11 @@ module NumberLink
       sec = grid.current_section
       point = sec.st
 
-      grid.neighbors(point).each do |dir_mark, point2|
-
+      grid.neighbors_inner(point).each do |dir_mark, point2|
         next unless grid.empty_at?(point2)
         grid.chk_branch?(point2) || (cnt_tbl[:br] += 1) && next
-
         grid2 = grid.deep_copy
-        grid2.close_stat_at(point)
-        grid2.set_direction(point, dir_mark)
-        grid2.open_stat(point2, sec.name)
-        grid2.current_section.st = point2
-        grid2.close_connected_link
-
+        grid2.move(point, point2, sec.name, dir_mark)
         solve(grid2)
       end
     end
@@ -539,7 +534,7 @@ module NumberLink
     def print_progress(grid)
       return unless BREAK > 0
       print '.'
-      cnt_tbl[:ok] % BREAK > 0 || print_grid(grid)
+      cnt_tbl[:ok] % BREAK == 0 && print_grid(grid)
     end
 
     def print_grid(grid)
@@ -551,13 +546,10 @@ module NumberLink
 
     def to_s
       time = Time.now - start_time
-      time2 = time.divmod(60 * 60)
-      time3 = time2[1].divmod(60)
+      hour, minsec = time.divmod(60 * 60)
+      min, sec = minsec.divmod(60)
       cnt_str = cnt_tbl.map { |k, v| "#{k}:#{v}" } * ', '
-      sprintf(
-        "tm:%02d:%02d:%02d, #{cnt_str}",
-        time2[0], time3[0], time3[1]
-      )
+      sprintf("tm:%02d:%02d:%02d, #{cnt_str}", hour, min, sec)
     end
   end
 end
