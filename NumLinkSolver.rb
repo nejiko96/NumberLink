@@ -128,6 +128,11 @@ module NumberLink
       self
     end
 
+    def reject(&blk)
+      @e = @e.reject(&blk)
+      self
+    end
+
     def lazy
       @e = @e.lazy
       self
@@ -379,13 +384,10 @@ module NumberLink
     end
 
     def split_at?(p)
-      pat = 0
-      arounds(p).each.with_index do |arnd, i|
-        flag = 1 << i
-        next pat |= flag unless inside?(arnd)
-        next pat |= flag unless empty_at?(arnd)
-      end
-      SPLIT_PATTERNS.include?(pat)
+      split_pat = arounds(p).each.with_index
+        .reject { |arnd, i| inside?(arnd) && empty_at?(arnd) }
+        .reduce(0) { |pat, (arnd, i)| pat | 1 << i }
+      SPLIT_PATTERNS.include?(split_pat)
     end
 
     def chk_forward1?
@@ -406,10 +408,10 @@ module NumberLink
     end
 
     def fill_partition_forward1(p, open_ends)
+      neighbors(p).inner.select { |nbor| open_at?(nbor) }
+        .each { |nbor| open_ends[nbor] = true }
       fill_stat_at(p)
-      neighbors(p).inner.each do |nbor|
-        open_ends[nbor] = true if open_at?(nbor)
-        next unless empty_at?(nbor)
+      neighbors(p).lazy.inner.emptys.each do |nbor|
         fill_partition_forward1(nbor, open_ends)
       end
     end
