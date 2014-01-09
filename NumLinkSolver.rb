@@ -113,18 +113,18 @@ module NumberLink
     end
   end
 
-    # = enumerates point
-    class PointEnumerator
+  # = enumerates point
+  class PointEnumerator
     extend Forwardable
     def_delegators :@e, :each, :any?
 
     def initialize(g, &blk)
-      @e = Enumerator.new &blk
+      @e = Enumerator.new(&blk)
       @g = g
     end
 
     def select(&blk)
-      @e = @e.select &blk
+      @e = @e.select(&blk)
       self
     end
 
@@ -172,7 +172,7 @@ module NumberLink
     def neighbors(p)
       PointEnumerator.new(self) do |yielder|
         NEIGHBOR_DIRECTIONS.each_value do |d|
-            yielder.yield [p[0] + d[0], p[1] + d[1]]
+          yielder.yield [p[0] + d[0], p[1] + d[1]]
         end
       end
     end
@@ -180,7 +180,7 @@ module NumberLink
     def neighbor_dirs(p)
       DirEnumerator.new(self) do |yielder|
         NEIGHBOR_DIRECTIONS.each do |dir, d|
-            yielder.yield dir, [p[0] + d[0], p[1] + d[1]]
+          yielder.yield dir, [p[0] + d[0], p[1] + d[1]]
         end
       end
     end
