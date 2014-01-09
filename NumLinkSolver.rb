@@ -116,7 +116,7 @@ module NumberLink
   # = enumerates point
   class PointEnumerator
     extend Forwardable
-    def_delegators :@e, :each, :any?
+    def_delegators :@e, :each, :any?, :all?, :count
 
     def initialize(g, &blk)
       @e = Enumerator.new(&blk)
@@ -261,6 +261,10 @@ module NumberLink
     def remove_sect(sec)
       sects.delete sec
     end
+
+    def alive_sects(open_ends)
+      sects.select { |sec| ([sec.st, sec.ed] - open_ends.keys).empty? }
+    end
   end
 
   # = Forward-1 points access methods
@@ -341,32 +345,23 @@ module NumberLink
       g.all_points.lazy.emptys.each do |p|
         open_ends = {}
         return false unless g.fill_partition(p, open_ends)
-        sec_active = false
-        sects.each do |sec|
-          next unless open_ends.include?(sec.st)
-          next unless open_ends.include?(sec.ed)
-          sec_active = true
-          g.remove_sect(sec)
-        end
-        return Debug.error("#{p}: dead partition", g) unless sec_active
+        alive_sects = alive_sects(open_ends)
+        return Debug.error("#{p}: dead partition", g) if alive_sects.empty?
+        g.sects -= alive_sects
       end
-      return Debug.error("#{g.current_sect}: split", g) unless g.sects.empty?
+      return Debug.error("#{g.sects * ','}: split", g) unless g.sects.empty?
       true
     end
 
     def fill_partition(p, open_ends)
-      free_cnt = 0
-      neighbors(p).inner.each do |nbor|
-        next if closed_at?(nbor)
-        free_cnt += 1
-        open_at?(nbor) && open_ends[nbor] = true
-      end
+      free_cnt = neighbors(p).inner.count { |nbor| !closed_at?(nbor) }
       return Debug.error("#{p}: dead end", self) if free_cnt <= 1
+      neighbors(p).inner.select { |nbor| open_at?(nbor) }
+        .each { |nbor| open_ends[nbor] = true }
       fill_stat_at(p)
-      neighbors(p).lazy.inner.emptys.each do |nbor|
-        return false unless fill_partition(nbor, open_ends)
+      neighbors(p).lazy.inner.emptys.all? do |nbor|
+        fill_partition(nbor, open_ends)
       end
-      true
     end
   end
 
@@ -404,11 +399,7 @@ module NumberLink
         open_ends = {}
         g.fill_partition_forward1(p, open_ends)
         return Debug.error("#{fd}: dead partition at #{p}", g) if open_ends.empty?
-        sects.each do |sec|
-          next unless open_ends.include?(sec.st)
-          next unless open_ends.include?(sec.ed)
-          g.remove_sect(sec)
-        end
+        g.sects -= alive_sects(open_ends)
       end
       return Debug.error("#{fd}: multiple split #{g.sects * ','}", g) if g.sects.size > 1
       true
