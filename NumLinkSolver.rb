@@ -303,10 +303,10 @@ module NumberLink
     def connect_link(sec = nil)
       sec ||= current_sect
       diff = [sec.ed[0] - sec.st[0], sec.ed[1] - sec.st[1]]
-      dir_mark = NEIGHBOR_DIRECTIONS.key(diff)
-      return unless dir_mark
+      dir = NEIGHBOR_DIRECTIONS.key(diff)
+      return unless dir
       close_stat_at(sec.st) unless sec.has_prev
-      set_direction(sec.st, dir_mark)
+      set_direction(sec.st, dir)
       close_stat_at(sec.ed) unless sec.has_next
       remove_sect(sec)
       Debug.success("link #{sec} closed", self)
